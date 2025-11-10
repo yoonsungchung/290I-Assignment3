@@ -1,10 +1,10 @@
 from fastapi import FastAPI, UploadFile, File
+import json
 from utils import create_graph_from_json, reconstruct_path
 from dijkstra import dijkstra
 
 app = FastAPI()
 
-# Store uploaded graph
 active_graph = None
 
 
@@ -15,41 +15,59 @@ async def root():
 
 @app.post("/upload_graph_json/")
 async def upload_graph_json(file: UploadFile = File(...)):
-    """Upload JSON graph file and convert it to Graph object."""
     global active_graph
 
-    # Validate file type
     if not file.filename.endswith(".json"):
-        return {"Upload Error": "File must be a JSON"}
+        return {"Upload Error": "Invalid file type. Please upload a JSON file."}
 
     try:
-        # Use the JSON-to-Graph builder from utils.py
-        active_graph = create_graph_from_json(file)
+        raw = await file.read()
+        parsed_json = json.loads(raw.decode("utf-8"))
+
+        # send parsed JSON list to utils
+        active_graph = create_graph_from_json(parsed_json)
+
         return {"Upload Success": file.filename}
 
     except Exception as e:
         return {"Upload Error": str(e)}
 
 
-@app.get("/solve_shortest_path/start_node_id={start_node_id}&end_node_id={end_node_id}")
+@app.get("/solve_shortest_path/")
 async def solve_shortest_path(start_node_id: str, end_node_id: str):
-    """Solves the shortest path using Dijkstra."""
     global active_graph
 
     if active_graph is None:
-        return {"Solver Error": "Please upload a graph first."}
+        return {"Solver Error": "No active graph, please upload a graph first."}
 
+    # node
     if start_node_id not in active_graph.nodes or end_node_id not in active_graph.nodes:
         return {"Solver Error": "Invalid start or end node ID."}
 
-    # Run the Dijkstra algorithm
-    dist, prev = dijkstra(active_graph, start_node_id)
+    start_node = active_graph.nodes[start_node_id]
+    end_node = active_graph.nodes[end_node_id]
 
-    path = reconstruct_path(prev, start_node_id, end_node_id)
-    if path is None:
-        return {"Solver Error": "No path exists between the selected nodes."}
+    try:
+        # run Dijkstra (updates nodes in place)
+        dijkstra(active_graph, start_node)
+
+        # reconstruct path
+        path = []
+        cur = end_node
+        while cur is not None:
+            path.append(cur.id)
+            cur = cur.prev
+        path.reverse()
+
+        if path[0] != start_node_id:
+            return {"Solver Error": "No path found between nodes."}
+
+        total_distance = end_node.dist
+
+    except Exception as e:
+        return {"Solver Error": f"Internal solver failure: {str(e)}"}
 
     return {
         "shortest_path": path,
-        "total_distance": dist[end_node_id]
+        "total_distance": total_distance
     }
